@@ -205,23 +205,28 @@ async function sendMessage() {
     img: ({ node, ...props }: any) => <img {...props} alt={props.alt || "image"} className="max-w-full rounded" />,
 
     // Code: inline vs block
-    code: ({ node, inline, className, children, ...props }: any) => {
-      if (inline) {
-        return (
-          <code className="rounded bg-gray-100 px-1 py-0.5 text-xs text-red-600" {...props}>
-            {children}
-          </code>
-        );
-      }
-      // block code: output pre/code with overflow so it won't break layout
+  code: ({ node, inline, className, children, ...props }: any) => {
+    if (inline) {
+      // Inline code: subtle highlight
       return (
-        <pre className="rounded bg-gray-900 text-white p-3 overflow-auto my-2">
-          <code className={className} {...props}>
-            {children}
-          </code>
-        </pre>
+        <code
+          className="rounded bg-gray-200 px-1 py-0.5 text-xs text-red-600"
+          {...props}
+        >
+          {children}
+        </code>
       );
-    },
+    }
+
+    // Block code: current styling (unchanged)
+    return (
+      <pre className="rounded bg-gray-100 text-gray-900 p-3 overflow-auto my-2">
+        <code className={className} {...props}>
+          {children}
+        </code>
+      </pre>
+    );
+  },
   };
 
   return (
@@ -255,7 +260,7 @@ async function sendMessage() {
                   </div>
 
                   <div className={`max-w-[80%] p-3 rounded-xl shadow-sm ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-gray-50 text-gray-900"}`}>
-                    <div className="prose prose-sm max-w-full">
+                    <div className="prose prose-sm max-w-full break-words">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         rehypePlugins={[rehypeRaw, rehypeSanitize]}

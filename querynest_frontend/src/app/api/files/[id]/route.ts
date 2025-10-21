@@ -49,13 +49,14 @@ export async function DELETE(req: Request, context: { params: Promise<{ id: stri
       console.error("DB delete error", delErr);
       return NextResponse.json({ error: delErr.message }, { status: 500 });
     }
-
     // 4️⃣ Delete document from Elasticsearch
     try {
-      await esClient.delete({
+      const res = await esClient.delete({
         index: "documents",
         id, // same as Supabase ID
       });
+
+      console.log("Elasticsearch delete response", res);
     } catch (esErr: any) {
       // If the document does not exist in ES, just log a warning
       if (esErr.meta?.statusCode === 404) {

@@ -1,96 +1,305 @@
 // app/api/chats/[conversationId]/messages/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { VertexAI, GenerativeModel } from "@google-cloud/vertexai";
+import { GoogleGenAI, FunctionCallingConfigMode } from "@google/genai";
+import { randomUUID } from "crypto";
 
 export const config = { runtime: "nodejs" };
 
-// stronger system prompt that instructs tool usage explicitly
+// --- system prompt ---
 const SYSTEM_PROMPT =
-  "You are a helpful assistant with access to an external document search tool named 'elasticsearch'. " +
-  "Whenever a user query is about facts, documents, or the user's personal/work/academic data, you MUST call the " +
-  "'elasticsearch' tool to retrieve relevant passages and include citations from those passages in your answer. " +
-  "If the tool returns results, use them as authoritative and indicate the source (doc id or filename). " +
-  "If the tool cannot be reached or returns no results, say so and answer based on your knowledge (or say you don't know).";
+  "You are an intelligent assistant for a company called QueryNest, which helps users easily interact with and query their documents." +
+  "If you need to fetch information from the knowledge base, you may call the function named 'elasticsearch' with a single parameter 'query'. " +
+  "If you're asked something personal, or related to something that you probably don't know the answer to, query the knowledgebase to see if you can find an answer. " +
+  "If you're asked for something that may be related to a file, assume its from the knowledgebase and query it. " +
+  "Treat this function as the user's knowledge base. The user knows this function as their 'knowledgebase'" +
+  "If you call it, the server will execute the search and provide the results back to you. Otherwise, answer the user's questions directly and naturally." 
 
-// supabase / vertex / es envs (same as yours)
+
+// --- env / clients ---
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-const PROJECT_ID = process.env.GCP_PROJECT_ID!;
-const LOCATION = process.env.GCP_LOCATION || "us-central1";
-const vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-const MODEL_NAME = process.env.VERTEX_AI_MODE || process.env.VERTEX_AI_MODEL || "gemini-1.5-flash";
+const PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || "";
+const LOCATION = process.env.GCP_LOCATION || process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
+const MODEL_NAME = process.env.VERTEX_AI_MODEL || process.env.VERTEX_AI_MODE || "gemini-2.5-pro";
 
 const ELASTICSEARCH_URL = (process.env.ELASTIC_URL || "").replace(/\/+$/, "");
 const ELASTIC_APIKEY_RAW = process.env.ELASTIC_APIKEY || "";
-const ELASTIC_SEARCH_TEMPLATE = process.env.ELASTIC_SEARCH_TEMPLATE || "grounding_search_template";
+const ELASTIC_INDEX = process.env.ELASTIC_INDEX || "documents";
+const ELASTIC_NUM_HITS = Number(process.env.ELASTIC_NUM_HITS || "5");
 const USE_ES_GROUNDING = (process.env.ELASTIC_USE_GROUNDING || "true").toLowerCase() === "true";
 
-/* helpers (keep your implementations) */
-function extractAssistantText(responseObj: any): string {
-  if (!responseObj) return "";
-  const res = responseObj.response || responseObj;
-  try {
-    if (res.candidates && res.candidates.length > 0) {
-      const candidate = res.candidates[0];
-      if (candidate.content?.parts && candidate.content.parts.length > 0) {
-        return candidate.content.parts.map((p: any) => p.text || "").join("\n");
-      }
-      if (typeof candidate.content === "string") return candidate.content;
-    }
-  } catch (e) {
-    console.error("extractAssistantText parsing error", e);
-  }
-  return "";
-}
-function extractCitations(_: any) { return []; }
-function unescapeString(s: string) { return s; }
+// New: max bytes for the tool (adjust via env ES_TOOL_RESPONSE_MAX_BYTES)
+const ES_TOOL_RESPONSE_MAX_BYTES = Number(process.env.ES_TOOL_RESPONSE_MAX_BYTES || "100000"); // default 100KB
 
+const genAI = new GoogleGenAI({
+  vertexai: true,
+  project: PROJECT_ID,
+  location: LOCATION,
+});
+
+// --- helpers ---
 function formatApiKey(raw: string) {
   if (!raw) return "";
   return raw.startsWith("ApiKey ") ? raw : `ApiKey ${raw}`;
 }
 
-/* perform manual retrieval (fallback only) */
-async function retrieveFromElasticsearch(query: string, indexName = "documents", maxResults = 5) {
-  if (!ELASTICSEARCH_URL) return [];
-  const url = `${ELASTICSEARCH_URL}/${encodeURIComponent(indexName)}/_search`;
+function safeGetText(resp: any): string {
+  if (!resp) return "";
+  try {
+    // Prefer top-level text property
+    if (typeof resp.text === "string" && resp.text.trim()) return resp.text.trim();
+    // Some SDK shapes export output / output_text
+    if (typeof resp.output === "string" && resp.output.trim()) return resp.output.trim();
+    if (typeof resp.output_text === "string" && resp.output_text.trim()) return resp.output_text.trim();
+
+    // Function-calling candidate shapes / alternatives
+    if (resp?.candidates && Array.isArray(resp.candidates) && resp.candidates.length) {
+      const cand = resp.candidates[0];
+      if (cand?.content) {
+        if (typeof cand.content === "string") return cand.content;
+        if (Array.isArray(cand.content.parts)) {
+          return cand.content.parts.map((p: any) => p.text || "").join("");
+        }
+      }
+      if (typeof cand.output === "string" && cand.output.trim()) return cand.output;
+    }
+
+    // Older / alternate shapes
+    if (Array.isArray(resp.content?.parts)) {
+      return resp.content.parts.map((p: any) => p.text || "").join("");
+    }
+  } catch (e) {
+    console.error("safeGetText parse error", e);
+  }
+  return "";
+}
+
+/**
+ * Extract model function-call (if present) from a generateContent response.
+ */
+function extractFunctionCall(resp: any): { name: string; args: any; rawCandidate?: any } | null {
+  if (!resp) return null;
+
+  // Check canonical SDK shapes
+  if (Array.isArray(resp.functionCalls) && resp.functionCalls.length) {
+    const fc = resp.functionCalls[0];
+    return { name: fc.name, args: fc.args || fc.parameters || {}, rawCandidate: resp.functionCalls[0] };
+  }
+
+  if (Array.isArray(resp.function_calls) && resp.function_calls.length) {
+    const fc = resp.function_calls[0];
+    return { name: fc.name, args: fc.args || fc.parameters || {}, rawCandidate: resp.function_calls[0] };
+  }
+
+  // candidates-based shapes
+  if (resp.candidates && resp.candidates.length) {
+    const cand = resp.candidates[0];
+
+    if (cand?.functionCalls && cand.functionCalls.length) {
+      const fc = cand.functionCalls[0];
+      return { name: fc.name, args: fc.args || fc.arguments || {}, rawCandidate: cand };
+    }
+
+    if (cand.function_call) {
+      return { name: cand.function_call.name, args: cand.function_call.args || cand.function_call.arguments || {}, rawCandidate: cand };
+    }
+    if (cand.functionCall) {
+      return { name: cand.functionCall.name, args: cand.functionCall.args || cand.functionCall.arguments || {}, rawCandidate: cand };
+    }
+
+    // sometimes function_call is embedded in content parts
+    if (cand.content && Array.isArray(cand.content.parts)) {
+      for (const p of cand.content.parts) {
+        if (p.function_call) {
+          return { name: p.function_call.name, args: p.function_call.args || p.function_call.arguments || {}, rawCandidate: cand };
+        }
+        if (p.functionCall) {
+          return { name: p.functionCall.name, args: p.functionCall.args || p.functionCall.arguments || {}, rawCandidate: cand };
+        }
+      }
+    }
+  }
+
+  // fallback: some responses expose top-level functionCalls
+  if (Array.isArray(resp.functionCalls) && resp.functionCalls.length) {
+    const fc = resp.functionCalls[0];
+    return { name: fc.name, args: fc.args || fc.parameters || {}, rawCandidate: resp };
+  }
+
+  return null;
+}
+
+/**
+ * Call Elasticsearch _search and return normalized hits.
+ */
+async function callElasticsearch(query: string, numHits = ELASTIC_NUM_HITS) {
+  if (!ELASTICSEARCH_URL || !ELASTIC_APIKEY_RAW) {
+    throw new Error("Elasticsearch not configured (ELASTIC_URL or ELASTIC_APIKEY missing).");
+  }
+
+  const endpoint = `${ELASTICSEARCH_URL}/${encodeURIComponent(ELASTIC_INDEX)}/_search`;
   const body = {
-    size: maxResults,
+    size: numHits,
     query: {
       multi_match: {
         query,
-        fields: ["content^3", "ocr_text", "originalName"],
+        fields: ["title^3", "filename^2", "content", "text", "body"],
         fuzziness: "AUTO",
       },
     },
-    _source: ["fileId", "originalName", "content", "ocr_text", "filename"],
+    _source: ["id", "title", "filename", "content", "path"],
   };
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (ELASTIC_APIKEY_RAW) headers["Authorization"] = formatApiKey(ELASTIC_APIKEY_RAW);
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: formatApiKey(ELASTIC_APIKEY_RAW),
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Elasticsearch query failed: ${resp.status} ${resp.statusText} - ${text}`);
+  }
+
+  const data = await resp.json();
+  const hits = (data?.hits?.hits || []).map((h: any) => ({
+    id: h._id || h._source?.id || null,
+    score: h._score || 0,
+    source: h._source || {},
+  }));
+  return hits;
+}
+
+/**
+ * Estimate byte size of an object when JSON.stringified
+ */
+function estimateBytes(obj: any) {
   try {
-    const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-    if (!resp.ok) {
-      console.error("ES error", resp.status, await resp.text());
-      return [];
-    }
-    const json = await resp.json();
-    return (json.hits?.hits || []).map((h: any) => ({
-      id: h._id || h._source?.fileId || "",
-      title: h._source?.originalName || h._source?.filename || "",
-      content: h._source?.content || h._source?.ocr_text || "",
-      score: h._score ?? null,
-    }));
-  } catch (err) {
-    console.error("retrieveFromElasticsearch error:", err);
-    return [];
+    return Buffer.byteLength(JSON.stringify(obj), "utf8");
+  } catch (e) {
+    return Infinity;
   }
 }
 
-/** POST handler — prioritise native grounding and only inject docs as a fallback */
+/**
+ * Prune hits to keep serialized size under maxBytes.
+ * Strategy:
+ *  - Reduce snippet length first, then number of hits.
+ *  - Conservative reductions until within size limit or cannot reduce more.
+ */
+function pruneHitsForModel(origHits: any[], maxBytes: number) {
+  const hitsCopy = (origHits || []).map(h => ({ ...h, source: { ...(h.source || {}) } }));
+  if (!hitsCopy.length) {
+    return {
+      hits: [],
+      truncated: false,
+      originalCount: 0,
+      finalCount: 0,
+      snippetLength: 0,
+      serializedBytes: 0,
+    };
+  }
+
+  let snippetLen = 400; // starting snippet length (matches buildFunctionResponse default)
+  const minSnippet = 50;
+  let maxHits = hitsCopy.length;
+  const minHits = 1;
+
+  const buildPreview = (count: number, sLen: number) =>
+    hitsCopy.slice(0, count).map(h => ({
+      id: h.id,
+      score: h.score,
+      title: h.source?.title || h.source?.filename || null,
+      path: h.source?.path || null,
+      snippet: (h.source?.content || h.source?.text || h.source?.body || "").toString().slice(0, sLen),
+    }));
+
+  let preview = buildPreview(maxHits, snippetLen);
+  let size = estimateBytes({ hits: preview });
+
+  // Iteratively reduce snippetLen first, then number of hits
+  while (size > maxBytes) {
+    if (snippetLen > minSnippet) {
+      snippetLen = Math.max(minSnippet, Math.floor(snippetLen * 0.7));
+    } else if (maxHits > minHits) {
+      maxHits = Math.max(minHits, Math.floor(maxHits * 0.7));
+    } else {
+      break;
+    }
+
+    preview = buildPreview(maxHits, snippetLen);
+    size = estimateBytes({ hits: preview });
+  }
+
+  // Build final pruned hits (canonicalize content -> 'content' and remove large fields)
+  const finalHits = hitsCopy.slice(0, maxHits).map(h => {
+    const rawContent = (h.source?.content || h.source?.text || h.source?.body || "").toString();
+    const trimmedContent = rawContent.slice(0, snippetLen);
+    const newSource: any = { ...h.source, content: trimmedContent };
+    delete newSource.body;
+    delete newSource.text;
+    return { ...h, source: newSource };
+  });
+
+  return {
+    hits: finalHits,
+    truncated: (finalHits.length !== origHits.length) || snippetLen < 400,
+    originalCount: origHits.length,
+    finalCount: finalHits.length,
+    snippetLength: snippetLen,
+    serializedBytes: estimateBytes({ hits: finalHits }),
+  };
+}
+
+/**
+ * Convert hits to a compact JSON object we can pass back as the function response.
+ */
+function buildFunctionResponse(hits: any[]) {
+  return {
+    hits: hits.map((h) => ({
+      id: h.id,
+      score: h.score,
+      title: h.source?.title || h.source?.filename || null,
+      // Use whatever 'content' is present (may already be trimmed by pruneHitsForModel)
+      snippet: (h.source?.content || h.source?.text || h.source?.body || "").toString().slice(0, 400),
+      path: h.source?.path || null,
+    })),
+  };
+}
+
+// --- GET handler ---
+export async function GET(_req: Request, { params }: { params: { conversationId: string } }) {
+  try {
+    const { conversationId } = await params;
+    if (!conversationId) {
+      return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
+    }
+
+    const { data: messages, error } = await supabaseAdmin
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("supabase list messages error", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ messages: messages || [] }, { status: 200 });
+  } catch (err) {
+    console.error("messages GET error", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
+}
+
+// --- POST handler (function-calling using Gemini function declarations, simplified) ---
 export async function POST(req: Request, { params }: { params: { conversationId: string } }) {
   try {
     const { conversationId } = await params;
@@ -100,11 +309,9 @@ export async function POST(req: Request, { params }: { params: { conversationId:
 
     if (!content) return NextResponse.json({ error: "content is required" }, { status: 400 });
 
-    const pairId = typeof crypto?.randomUUID === "function"
-      ? crypto.randomUUID()
-      : require("crypto").randomUUID();
+    const pairId = typeof randomUUID === "function" ? randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-    // store user message
+    // 1) Save user message
     const { data: userInserted, error: insertErr } = await supabaseAdmin
       .from("messages")
       .insert([{ conversation_id: conversationId, pair_id: pairId, role: "user", content, metadata }])
@@ -115,7 +322,7 @@ export async function POST(req: Request, { params }: { params: { conversationId:
       return NextResponse.json({ error: "DB insert failed" }, { status: 500 });
     }
 
-    // fetch history as before
+    // 2) Fetch history (roles: user/model)
     const { data: msgs, error: fetchErr } = await supabaseAdmin
       .from("messages")
       .select("role, content")
@@ -125,156 +332,244 @@ export async function POST(req: Request, { params }: { params: { conversationId:
       console.error("fetch history error", fetchErr);
       return NextResponse.json({ error: "Failed to fetch conversation history" }, { status: 500 });
     }
-    const historyContents = (msgs || []).map((m: any) => ({
-      role: m.role === "user" ? "user" : "model",
-      parts: [{ text: m.content }],
-    }));
 
-    // Build base inputs (history + user)
-    const modelInputsBase: any[] = [...historyContents];
-    modelInputsBase.push({ role: "user", parts: [{ text: content }] });
-
-    // Set up model with system instruction (explicit)
-    const model: GenerativeModel = vertexAI.getGenerativeModel({
-      model: MODEL_NAME,
-      systemInstruction: { role: "system", parts: [{ text: SYSTEM_PROMPT }] },
+    // 3) Compose contents for model (history + current)
+    const contents: any[] = [];
+    (msgs || []).forEach((m: any) => {
+      contents.push({
+        role: m.role === "user" ? "user" : "model",
+        parts: [{ text: m.content }],
+      });
     });
+    contents.push({ role: "user", parts: [{ text: content }] });
 
-    // Build tools if native grounding enabled.
-    // >>> FIX: DO NOT include `name` or `description` fields here — Vertex rejects unknown top-level keys.
-    let tools: any[] | undefined = undefined;
-    let willAttemptNativeGrounding = USE_ES_GROUNDING && !!ELASTIC_APIKEY_RAW && !!ELASTICSEARCH_URL;
-    if (willAttemptNativeGrounding) {
-      tools = [{
-        // no name/description keys here — removed to match Vertex API
-        retrieval: {
-          externalApi: {
-            api_spec: "ELASTIC_SEARCH",
-            endpoint: ELASTICSEARCH_URL,
-            apiAuth: { apiKeyConfig: { apiKeyString: formatApiKey(ELASTIC_APIKEY_RAW) } },
-            elasticSearchParams: {
-              index: "documents",
-              searchTemplate: ELASTIC_SEARCH_TEMPLATE,
-              numHits: 5,
-            },
+    // 4) Declare the 'elasticsearch' function (FunctionDeclaration; OpenAPI/JSON Schema)
+    const esFunctionDeclaration = {
+      name: "elasticsearch",
+      description: "Search the internal Elasticsearch knowledge base. Args: { query: string, num_hits?: integer }. Returns JSON with hits array {id,title,snippet,score,path}.",
+      // SDK expects parametersJsonSchema for function declarations
+      parametersJsonSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+          num_hits: { type: "integer", description: "Number of hits to return" },
+        },
+        required: ["query"],
+      },
+    };
+
+    // Wrap in a Tool as required by the SDK shape (tools in config expect functionDeclarations)
+    const esTool = {
+      functionDeclarations: [esFunctionDeclaration],
+    };
+
+    // 5) First call: let the model decide whether to call the function
+    const firstResp = await genAI.models.generateContent({
+      model: MODEL_NAME,
+      contents,
+      config: {
+        systemInstruction: [SYSTEM_PROMPT],
+        // toolConfig controls function-calling behavior
+        toolConfig: {
+          functionCallingConfig: {
+            mode: FunctionCallingConfigMode.AUTO,
           },
         },
-      }];
-    }
+        tools: [esTool],
+        maxOutputTokens: 2000,
+      },
+    });
 
-    // 1) Primary attempt: ask Vertex to generate with tools present (native grounding preferred)
-    let genResponse: any = null;
-    let usedNativeGrounding = false;
-    try {
-      console.log("Primary Vertex.generateContent call; toolsPresent=", !!tools);
-      const genArgs: any = { contents: modelInputsBase };
-      if (tools) genArgs.tools = tools;
+    // Extract the model's text (if any) and detect function call
+    const firstText = safeGetText(firstResp || "").trim();
+    console.log("First model output (truncated):", firstText.slice(0, 800));
 
-      const callResult = await model.generateContent(genArgs);
-      genResponse = await (callResult?.response ?? callResult);
-      console.log("Primary Vertex response (truncated):", JSON.stringify(genResponse, null, 2).slice(0, 2000));
+    const funcCall = extractFunctionCall(firstResp);
 
-      // check for toolResponses / grounding metadata
-      const toolResponses = genResponse?.toolResponses || genResponse?.response?.toolResponses || null;
-      const groundingMeta = genResponse?.grounding || genResponse?.groundingMetadata || null;
-      const hasRetrieval = !!(toolResponses && toolResponses.length > 0) || (groundingMeta && Object.keys(groundingMeta).length > 0);
+    // If model didn't call the function, save and return that direct answer (single AI response)
+    if (!funcCall) {
+      const { data: aiInserted, error: aiInsertErr } = await supabaseAdmin
+        .from("messages")
+        .insert([{
+          conversation_id: conversationId,
+          pair_id: pairId,
+          role: "assistant",
+          content: firstText,
+          metadata: {
+            retrieved_from: "none",
+          },
+        }])
+        .select()
+        .single();
 
-      if (tools && hasRetrieval) {
-        usedNativeGrounding = true;
-        console.log("Primary attempt: Vertex used native ES grounding (toolResponses/groundingMetadata present).");
-      } else if (tools && !hasRetrieval) {
-        console.warn("Primary attempt: Vertex did NOT return toolResponses/groundingMetadata. Will try a targeted 'call-tool' prompt once.");
+      if (aiInsertErr) {
+        console.error("insert assistant message error", aiInsertErr);
+        // Return the assistant text even if DB insert fails
+        return NextResponse.json({ user: userInserted, assistant: { role: "assistant", content: firstText } }, { status: 200 });
       }
-    } catch (err) {
-      console.error("Primary Vertex.generateContent failed:", err);
-      genResponse = null;
+
+      return NextResponse.json({ user: userInserted, assistant: aiInserted }, { status: 200 });
     }
 
-    // 2) If primary attempt did not produce a tool invocation AND tools exist, perform ONE explicit retry
-    if (!usedNativeGrounding && tools) {
+    // Ensure it's the expected function
+    if (funcCall.name !== "elasticsearch") {
+      const warnText = `Model attempted to call an unexpected function: ${funcCall.name}`;
+      const { data: aiInserted, error: aiInsertErr } = await supabaseAdmin
+        .from("messages")
+        .insert([{
+          conversation_id: conversationId,
+          pair_id: pairId,
+          role: "assistant",
+          content: warnText,
+          metadata: { retrieved_from: "function_unexpected" },
+        }])
+        .select()
+        .single();
+      if (aiInsertErr) console.error("insert assistant message error", aiInsertErr);
+      return NextResponse.json({ user: userInserted, assistant: aiInserted || { role: "assistant", content: warnText } }, { status: 200 });
+    }
+
+    // Parse function arguments safely (string or object)
+    let funcArgs = funcCall.args || {};
+    if (typeof funcArgs === "string") {
       try {
-        // targeted prompt instructing model to call the tool (keeps it short)
-        const explicitToolPrompt = [
-          { role: "system", parts: [{ text: SYSTEM_PROMPT }] },
-          { role: "user", parts: [{ text: `Please use the "elasticsearch" tool now to retrieve documents relevant to: "${content}". Only call the tool and return your retrieval output (do not answer yet).` }] },
-        ];
-        console.log("Second Vertex.generateContent call (explicit tool request).");
-        const callResult2 = await model.generateContent({ contents: explicitToolPrompt, tools });
-        const resp2 = await (callResult2?.response ?? callResult2);
-        console.log("Explicit-tool-response (truncated):", JSON.stringify(resp2, null, 2).slice(0, 2000));
-
-        // If Vertex returned toolResponses, mark native grounding used and then do the actual generation (so model can use the tool output)
-        const toolResponses2 = resp2?.toolResponses || resp2?.response?.toolResponses || null;
-        const groundingMeta2 = resp2?.grounding || resp2?.groundingMetadata || null;
-        const hasRetrieval2 = !!(toolResponses2 && toolResponses2.length > 0) || (groundingMeta2 && Object.keys(groundingMeta2).length > 0);
-
-        if (hasRetrieval2) {
-          usedNativeGrounding = true;
-          console.log("Explicit attempt: Vertex returned toolResponses/groundingMetadata. Now do final generateContent to consume them.");
-
-          // Final call to produce assistant text with tool outputs available to the model
-          const finalGenArgs: any = { contents: modelInputsBase, tools };
-          const callResult3 = await model.generateContent(finalGenArgs);
-          genResponse = await (callResult3?.response ?? callResult3);
-          console.log("Final Vertex response after explicit-tool (truncated):", JSON.stringify(genResponse, null, 2).slice(0, 2000));
-        } else {
-          console.warn("Explicit attempt also did not produce toolResponses. Will fall back to manual retrieval.");
-        }
-      } catch (err2) {
-        console.error("Explicit-tool Vertex.generateContent failed:", err2);
-        // do nothing here; fallback path below
+        funcArgs = JSON.parse(funcArgs);
+      } catch (e) {
+        funcArgs = { query: funcCall.args };
       }
     }
 
-    // 3) If native grounding not used, fallback to manual retrieval and single re-call (ONLY fallback)
-    let retrievedDocsForLogging: any[] = [];
-    if (!usedNativeGrounding) {
-      console.log("Native grounding not used — performing manual retrieval (fallback).");
-      retrievedDocsForLogging = await retrieveFromElasticsearch(content, "documents", 5);
+    const esQuery = (funcArgs.query || "").toString().trim();
+    const numHits = Number(funcArgs.num_hits || ELASTIC_NUM_HITS);
 
-      // If we have retrieved docs, inject a 'tool' role message so the model sees authoritative tool output (fallback path)
-      if (retrievedDocsForLogging.length > 0) {
-        const toolText = retrievedDocsForLogging
-          .map(d => `${d.title ? d.title + ' | ' : ''}${d.id}\n${(d.content || "").slice(0, 800)}`)
-          .join("\n---\n");
+    if (!esQuery) {
+      const errText = "Function call 'elasticsearch' missing required parameter 'query'.";
+      const { data: aiInserted, error: aiInsertErr } = await supabaseAdmin
+        .from("messages")
+        .insert([{
+          conversation_id: conversationId,
+          pair_id: pairId,
+          role: "assistant",
+          content: errText,
+          metadata: { retrieved_from: "function_args_missing" },
+        }])
+        .select()
+        .single();
+      if (aiInsertErr) console.error("insert assistant message error", aiInsertErr);
+      return NextResponse.json({ user: userInserted, assistant: aiInserted || { role: "assistant", content: errText } }, { status: 200 });
+    }
 
-        // >>> FIX: DO NOT include `name` field in contents items. Vertex rejects `name` on contents.
-        // Build fallback inputs: history + (tool role with ES results) + user query
-        const fallbackInputs: any[] = [...historyContents];
-        fallbackInputs.push({ role: "tool", parts: [{ text: `ELASTICSEARCH_TOOL_RESULT:\n${toolText}` }] }); // no name here
-        fallbackInputs.push({ role: "user", parts: [{ text: content }] });
+    // 6) Execute Elasticsearch query
+    let hits: any[] = [];
+    let pruneResult: any = null;
+    try {
+      hits = await callElasticsearch(esQuery, numHits);
 
-        try {
-          const callResultFallback = await model.generateContent({ contents: fallbackInputs });
-          genResponse = await (callResultFallback?.response ?? callResultFallback);
-          console.log("Fallback generateContent response (truncated):", JSON.stringify(genResponse, null, 2).slice(0, 2000));
-        } catch (fbErr) {
-          console.error("Fallback model.generateContent failed:", fbErr);
-        }
+      // 6.1) Prune/trim hits so model won't be overloaded
+      pruneResult = pruneHitsForModel(hits, ES_TOOL_RESPONSE_MAX_BYTES);
+      hits = pruneResult.hits || [];
+    } catch (e: any) {
+      console.error("Elasticsearch query error:", e);
+      const assistantFailText = `Search failed: ${e.message || String(e)}`;
+
+      const { data: aiInserted, error: aiInsertErr } = await supabaseAdmin
+        .from("messages")
+        .insert([{
+          conversation_id: conversationId,
+          pair_id: pairId,
+          role: "assistant",
+          content: assistantFailText,
+          metadata: { retrieved_from: "elasticsearch_error" },
+        }])
+        .select()
+        .single();
+
+      if (aiInsertErr) console.error("insert assistant failure message error", aiInsertErr);
+      return NextResponse.json({ user: userInserted, assistant: aiInserted || { role: "assistant", content: assistantFailText } }, { status: 200 });
+    }
+
+    // 7) Build function response object (compact)
+    const funcResponseObj = buildFunctionResponse(hits);
+
+    // 8) Use the functionResponse pattern expected by some Gemini SDKs:
+    // Create a function response part as the model expects, then append the model's function-call candidate
+    // followed by a user part that contains the functionResponse. Then call generateContent again to finalize.
+    const function_response_part = {
+      name: funcCall.name,
+      response: funcResponseObj,
+    };
+
+    const contentsForFinal: any[] = [...contents];
+
+    // Append the model's original function-call candidate if present (so model sees its own call)
+    try {
+      const cand = firstResp?.candidates && firstResp.candidates.length ? firstResp.candidates[0] : null;
+
+      if (cand?.content) {
+        // push the model's candidate content as-is
+        contentsForFinal.push(cand.content);
       } else {
-        console.log("Manual retrieval returned no documents; will proceed without grounding.");
+        // Use safeGetText to extract text from various SDK shapes without relying on a specific 'output' field
+        const candText = safeGetText(cand) || (typeof firstResp?.text === "string" ? firstResp.text : "");
+
+        if (candText) {
+          contentsForFinal.push({ role: "model", parts: [{ text: candText }] });
+        } else {
+          // fallback marker
+          contentsForFinal.push({
+            role: "model",
+            parts: [{ text: `FunctionCall: ${funcCall.name}(${JSON.stringify(funcCall.args)})` }],
+          });
+        }
       }
+    } catch (e) {
+      contentsForFinal.push({
+        role: "model",
+        parts: [{ text: `FunctionCall: ${funcCall.name}(${JSON.stringify(funcCall.args)})` }],
+      });
     }
 
-    // Extract assistant text & citations
-    let assistantText = extractAssistantText(genResponse);
-    assistantText = unescapeString(assistantText).trim();
-    if (!assistantText) assistantText = "Sorry — the assistant produced no textual reply.";
+    // Append the function response in the specified 'functionResponse' shape inside a user role part
+    contentsForFinal.push({
+      role: "user",
+      parts: [{ functionResponse: function_response_part }],
+    });
 
-    const citations = extractCitations(genResponse) || [];
+    // 9) Finalize: ask model to produce the user-facing text, grounded in the function response.
+    const finalResp = await genAI.models.generateContent({
+      model: MODEL_NAME,
+      contents: contentsForFinal,
+      config: {
+        systemInstruction: [SYSTEM_PROMPT + " Use the search results passed in the tool response to produce the final user-facing answer."],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: FunctionCallingConfigMode.NONE, // prevent further function calls in this pass
+          },
+        },
+        tools: [esTool],
+        maxOutputTokens: 4000,
+      },
+    });
 
-    // Save assistant message
+    const finalText = (safeGetText(finalResp) || "").trim();
+
+    // 10) Save assistant final message (metadata contains the ES grounding info)
     const { data: aiInserted, error: aiInsertErr } = await supabaseAdmin
       .from("messages")
       .insert([{
         conversation_id: conversationId,
         pair_id: pairId,
         role: "assistant",
-        content: assistantText,
+        content: finalText,
         metadata: {
-          citations,
-          retrieved_from: usedNativeGrounding ? "elasticsearch_native" : "elasticsearch_manual",
-          retrieved_docs: usedNativeGrounding ? undefined : retrievedDocsForLogging,
+          retrieved_from: "elasticsearch_function_call",
+          tool_query: esQuery,
+          tool_original_hits_count: pruneResult?.originalCount ?? (hits?.length || 0),
+          tool_final_hits_count: pruneResult?.finalCount ?? (hits?.length || 0),
+          tool_snippet_length: pruneResult?.snippetLength ?? 0,
+          tool_serialized_bytes: pruneResult?.serializedBytes ?? estimateBytes({ hits }),
+          tool_truncated: !!pruneResult?.truncated,
+          tool_hits: (hits || []).slice(0, 10),
         },
       }])
       .select()
@@ -282,9 +577,10 @@ export async function POST(req: Request, { params }: { params: { conversationId:
 
     if (aiInsertErr) {
       console.error("insert assistant message error", aiInsertErr);
-      return NextResponse.json({ assistant: { role: "assistant", content: assistantText }, user: userInserted });
+      return NextResponse.json({ assistant: { role: "assistant", content: finalText }, user: userInserted });
     }
 
+    // Return the user + assistant records (assistant content is plain finalText)
     return NextResponse.json({ user: userInserted, assistant: aiInserted }, { status: 200 });
   } catch (err) {
     console.error("chat processing error", err);

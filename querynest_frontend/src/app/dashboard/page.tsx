@@ -22,7 +22,16 @@ const NewChat = () => {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to create conversation");
 
-      router.push(`/dashboard/chats/${json.conversation.id}`);
+      const conversationId = json.conversation.id;
+
+      // Now, send the initial message
+      await fetch(`/api/chats/${conversationId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: title }),
+      });
+
+      router.push(`/dashboard/chats/${conversationId}`);
     } catch (err: any) {
       console.error("createConversation error", err);
       alert(err?.message || "Failed to create conversation");
@@ -49,43 +58,9 @@ const NewChat = () => {
           </p>
         </div>
 
-        {/* Central Chat Preview / Empty State */}
-        <div className="w-full max-w-3xl flex flex-col items-center justify-center bg-white rounded-2xl shadow-lg border border-gray-200 p-8 sm:p-12 text-center transition-all duration-300 hover:shadow-2xl">
-          <div className="h-14 w-14 flex items-center justify-center rounded-xl bg-indigo-600/10 text-indigo-600 mb-6">
-            <MessageSquare className="w-7 h-7" />
-          </div>
-          <h2 className="text-xl sm:text-2xl font-semibold text-gray-900 mb-3">
-            How can I help you today?
-          </h2>
-          <p className="text-gray-600 mb-6 max-w-md">
-            You can ask questions like:
-            <br />
-            <span className="text-gray-800 font-medium">
-              “Summarize the Q3 marketing plan”  
-            </span> or{" "}
-            <span className="text-gray-800 font-medium">
-              “What’s the latest budget from Project Phoenix?”
-            </span>
-          </p>
-
-          {/* Suggested Prompts */}
-          <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mb-8">
-            {[
-              "Summarize latest project updates",
-              "Compare Q4 vs Q3 performance",
-              "List key insights from research docs",
-            ].map((prompt, i) => (
-              <button
-                key={i}
-                className="rounded-full border border-indigo-200 px-4 py-2 text-sm text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-all"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
-
-          {/* Chat Input */}
-          <div className="relative w-full max-w-2xl">
+        {/* --- Input moved outside the card (exact same input box + button) --- */}
+        <div className="w-full max-w-3xl px-4">
+          <div className="relative w-full max-w-2xl mx-auto">
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}

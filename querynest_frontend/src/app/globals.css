@@ -158,9 +158,32 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  code, pre, kbd {
-    font-family: var(--font-roboto);
-  }
+/* Code, pre, kbd styling */
+code {
+  font-family: var(--font-roboto);
+  background-color: var(--muted); /* subtle highlight instead of black */
+  padding: 0.1rem 0.3rem;
+  border-radius: var(--radius-sm);
+  color: var(--foreground);
+}
+
+pre {
+  font-family: var(--font-roboto);
+  background-color: var(--muted); /* subtle highlight */
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-md);
+  color: var(--foreground);
+  overflow-x: auto;
+}
+
+kbd {
+  font-family: var(--font-roboto);
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
 
   a {
     color: var(--primary);

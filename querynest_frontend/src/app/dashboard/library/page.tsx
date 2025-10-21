@@ -23,7 +23,7 @@ type LibFile = {
   enabled: boolean;
 };
 
-const STORAGE_LIMIT = 0.5 * 10000 * 10000;
+const STORAGE_LIMIT = 10 * 10000 * 10000;
 
 const formatBytes = (bytes: number) => {
   if (bytes === 0) return "0 B";
@@ -90,7 +90,7 @@ const formatFileType = (mime?: string | null, filename?: string | null) => {
 /* -----------------------------
    Validation & constants
    ----------------------------- */
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+const MAX_FILE_SIZE = 100000000//1 * 1024 * 1024; // 100MB
 
 const ALLOWED_EXTS = new Set([
   "docx", "xlsx", "pptx", "pdf", "odt", "ods", "odp",
@@ -215,7 +215,7 @@ export default function LibraryPage() {
     if (!list) return;
     for (const file of Array.from(list)) {
       if (file.size > MAX_FILE_SIZE) {
-        alert(`File "${file.name}" exceeds the 20MB limit.`);
+        alert(`File "${file.name}" exceeds the 100MB limit.`);
         continue;
       }
       if (!isAcceptedFile(file)) {
@@ -358,7 +358,7 @@ export default function LibraryPage() {
               </Button>
             </div>
 
-            <div className="text-xs text-gray-400 mt-2">Accepted: docx, xlsx, pptx, pdf, odt, ods, odp, md, markdown, csv, txt, jpeg, png, tiff, webp. Max 20MB per file.</div>
+            <div className="text-xs text-gray-400 mt-2">Accepted: docx, xlsx, pptx, pdf, odt, ods, odp, md, markdown, csv, txt, jpeg, png, tiff, webp. Max 100MB per file.</div>
 
             {/* Active uploads */}
             {Object.keys(uploadProgress).length > 0 && (
