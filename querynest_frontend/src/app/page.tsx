@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import Navbar from "@/components/other/Navbar";
 import Footer from "@/components/other/Footer";
+import Link from "next/link";
 
 // --- Section Utilities ---
 const SectionContainer = ({
@@ -63,67 +64,14 @@ const Hero = () => (
         <span className="text-indigo-600">Knowledge Hub.</span>
       </h1>
       <p className="mt-4 sm:mt-6 text-lg sm:text-xl text-gray-600 max-w-3xl mx-auto">
-        MindMesh is the AI-powered knowledge hub that lets you upload or sync
+        QueryNest is the AI-powered knowledge hub that lets you upload or sync
         documents (PDFs, DOCX, text) and receive concise, contextual answers
         instantly.
       </p>
       <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-x-6">
-        <Button variant="default" size="lg">
+        <Link href="/signup"><Button variant="default" size="lg">
           Start for Free <ArrowRight className="w-5 h-5 ml-2" />
-        </Button>
-        <Button variant="outline" size="lg">
-          View Demo
-        </Button>
-      </div>
-    </div>
-
-    {/* Mock Interface Preview */}
-    <div className="mt-12 sm:mt-16 hidden md:block">
-      <div className="relative overflow-hidden rounded-2xl bg-gray-900 shadow-2xl ring-1 ring-gray-900/10 p-4 sm:p-8">
-        <div className="absolute inset-0 z-0 bg-gradient-to-br from-indigo-900/50 to-gray-900 opacity-80" />
-        <div className="relative z-10 p-6 sm:p-12 border-4 border-indigo-500/30 rounded-xl">
-          <div className="h-96 bg-white/5 backdrop-blur-sm rounded-xl border border-white/20 flex flex-col">
-            <div className="bg-gray-800 p-3 rounded-t-xl flex items-center space-x-2">
-              <span className="h-3 w-3 rounded-full bg-red-500"></span>
-              <span className="h-3 w-3 rounded-full bg-yellow-500"></span>
-              <span className="h-3 w-3 rounded-full bg-green-500"></span>
-            </div>
-            <div className="flex-grow flex p-6">
-              <div className="w-1/4 pr-6 border-r border-gray-700 hidden lg:block">
-                <h4 className="text-sm font-semibold text-indigo-400 mb-4">
-                  DOCUMENTS
-                </h4>
-                <ul className="space-y-2 text-sm">
-                  <li className="text-white/80">Q4 Strategy Deck.pdf</li>
-                  <li className="text-white/80">Project Phoenix.docx</li>
-                  <li className="text-indigo-400 font-medium bg-gray-800 p-2 rounded-lg">
-                    Product Roadmap.txt
-                  </li>
-                </ul>
-              </div>
-              <div className="w-full lg:w-3/4 pl-0 lg:pl-6 space-y-4">
-                <div className="p-4 bg-indigo-600 rounded-xl rounded-bl-none text-white shadow-lg self-start max-w-full sm:max-w-xl ml-auto">
-                  What is the projected Q3 budget for the marketing team based
-                  on 'Project Phoenix'?
-                </div>
-                <div className="p-4 bg-gray-700 rounded-xl rounded-tl-none text-gray-200 shadow-lg self-start max-w-full sm:max-w-xl mr-auto">
-                  <p className="font-semibold text-indigo-300 mb-2">
-                    MindMesh AI Answer:
-                  </p>
-                  <p>
-                    The projected Q3 budget for the marketing team is{" "}
-                    <strong>$150,000</strong>, allocated primarily to digital
-                    ad spend and content creation, as detailed in section 3.2
-                    of the 'Project Phoenix' document.
-                  </p>
-                  <p className="mt-3 text-xs text-gray-400">
-                    Source: Project Phoenix.docx (Hybrid Elastic Search)
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        </Button></Link>
       </div>
     </div>
   </SectionContainer>
@@ -146,7 +94,7 @@ const featureList: FeatureItem[] = [
   {
     name: "Natural Language Querying",
     description:
-      "Stop digging through files. Ask questions in plain English and let MindMesh find the exact answer.",
+      "Stop digging through files. Ask questions in plain English and let QueryNest find the exact answer.",
     icon: Search,
   },
   {
@@ -158,11 +106,11 @@ const featureList: FeatureItem[] = [
   {
     name: "Hybrid Elastic Search",
     description:
-      "Answers are backed by advanced search technology, providing pinpoint accuracy and reliable source citations.",
+      "Answers are backed by advanced search technology, providing near-perfect accuracy.",
     icon: Zap,
   },
   {
-    name: "Cross-Document Insight Mode",
+    name: "Cross-Document Insights",
     description:
       "Gain macro-level insights across all uploaded documents, identifying trends and relationships instantly.",
     icon: BarChart3,
@@ -170,7 +118,7 @@ const featureList: FeatureItem[] = [
   {
     name: "Uniform Document Indexing",
     description:
-      "MindMesh handles disparate file formats, standardizing them into a single, queryable data layer.",
+      "QueryNest handles disparate file formats, standardizing them into a single, queryable data layer.",
     icon: FileText,
   },
 ];
@@ -178,7 +126,7 @@ const featureList: FeatureItem[] = [
 const Features = () => (
   <SectionContainer className="bg-gray-50">
     <SectionTitle
-      title="The Core Capabilities of MindMesh"
+      title="The Core Capabilities of QueryNest"
       subtitle="Features"
       center
     />
@@ -201,41 +149,6 @@ const Features = () => (
   </SectionContainer>
 );
 
-// --- Integrations Component ---
-const Integrations = () => (
-  <SectionContainer className="bg-white">
-    <SectionTitle
-      title="Connect Your Existing Knowledge Base"
-      subtitle="Seamless Integrations"
-      center
-    />
-    <p className="text-center text-base sm:text-lg text-gray-600 max-w-xl mx-auto mb-12 sm:mb-16">
-      MindMesh connects directly to the tools you already use, keeping your knowledge hub always up-to-date and instantly queryable.
-    </p>
-
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 sm:gap-8">
-      {[
-        { name: "Google Drive", icon: GitBranch },
-        { name: "Microsoft OneDrive", icon: Users },
-        { name: "Slack", icon: MessageSquareText },
-        { name: "Notion", icon: LayoutGrid },
-        { name: "SharePoint", icon: Zap },
-        { name: "Dropbox", icon: UploadCloud },
-      ].map((integration) => (
-        <div
-          key={integration.name}
-          className="flex flex-col items-center justify-center p-4 sm:p-6 bg-gray-50 rounded-xl transition-transform duration-300 hover:scale-[1.05] hover:shadow-md border border-gray-200"
-        >
-          <integration.icon className="h-8 w-8 sm:h-10 sm:w-10 text-indigo-600 mb-2 sm:mb-3" />
-          <span className="text-sm sm:text-base font-medium text-gray-700">
-            {integration.name}
-          </span>
-        </div>
-      ))}
-    </div>
-  </SectionContainer>
-);
-
 // --- Testimonials Component ---
 interface TestimonialItem {
   quote: string;
@@ -246,13 +159,13 @@ interface TestimonialItem {
 const testimonials: TestimonialItem[] = [
   {
     quote:
-      "MindMesh cut our document research time by 80%. Finding project specs used to take hours; now it's instant. The citation feature is a game-changer.",
+      "QueryNest cut our document research time by 80%. Finding project specs used to take hours; now it's instant. Its an absolute game-changer.",
     name: "Jane Doe",
     title: "Head of R&D at TechCorp",
   },
   {
     quote:
-      "The Insight Mode is invaluable. We quickly found overlooked dependencies between our legacy systems documentation and current deployment plans.",
+      "The cross-document insights are invaluable. We quickly found overlooked dependencies between our legacy systems documentation and current deployment plans.",
     name: "Alex Lee",
     title: "CTO of DataStream",
   },
@@ -304,23 +217,16 @@ const CTA = () => (
         Ready to Stop Searching, Start Knowing?
       </h2>
       <p className="mt-4 text-base sm:text-lg md:text-xl text-indigo-100 max-w-3xl mx-auto">
-        Join the MindMesh revolution today and transform your documents into actionable, instant knowledge.
+        Join the QueryNest revolution today and transform your documents into actionable, instant knowledge.
       </p>
       <div className="mt-6 sm:mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-x-6">
-        <Button
+        <Link href="/signup"><Button
           variant="default"
           size="lg"
           className="bg-white text-indigo-700 hover:bg-indigo-50 focus:ring-white/50 shadow-none"
         >
           Get Started Free <ArrowRight className="w-5 h-5 ml-2" />
-        </Button>
-        <Button
-          variant="outline"
-          size="lg"
-          className="text-white border-white bg-transparent hover:bg-indigo-700/50 focus:ring-white/50 shadow-none"
-        >
-          Contact Sales
-        </Button>
+        </Button></Link>
       </div>
     </div>
   </SectionContainer>
@@ -332,7 +238,6 @@ const Home = () => (
     <Navbar />
     <Hero />
     <Features />
-    <Integrations />
     <Testimonials />
     <CTA />
     <Footer />

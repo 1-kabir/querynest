@@ -2,7 +2,6 @@
 
 import React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { FaBars, FaTimes } from "react-icons/fa";
 import {
   Sheet,
@@ -15,13 +14,6 @@ import {
 import { Button } from "@/components/ui/button";
 
 export default function Navbar() {
-  const pathname = usePathname();
-
-  const navLinks = [
-    { href: "/#features", label: "Features" },
-    { href: "/#integrations", label: "Integrations" },
-  ];
-
   return (
     <header className="w-full bg-white border-b border-gray-200">
       <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
@@ -33,25 +25,14 @@ export default function Navbar() {
           <span className="text-lg font-semibold">QueryNest</span>
         </Link>
 
-        {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-6">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`font-medium hover:text-indigo-600 ${
-                pathname === link.href ? "underline" : ""
-              }`}
-            >
-              {link.label}
-            </Link>
-          ))}
+        {/* Desktop: only action */}
+        <div className="hidden md:flex items-center">
           <Link href="/signup">
-            <Button className="ml-2">Sign up</Button>
+            <Button>Sign up</Button>
           </Link>
-        </nav>
+        </div>
 
-        {/* Mobile nav */}
+        {/* Mobile: sheet with just the action */}
         <div className="md:hidden">
           <Sheet>
             <SheetTrigger asChild>
@@ -67,7 +48,6 @@ export default function Navbar() {
               side="right"
               className="w-72 p-6 flex flex-col h-full justify-between"
             >
-              {/* Header */}
               <SheetHeader>
                 <div className="flex items-center justify-between">
                   <SheetTitle>
@@ -78,25 +58,23 @@ export default function Navbar() {
                       <span className="text-lg font-semibold">QueryNest</span>
                     </div>
                   </SheetTitle>
-                  <SheetClose asChild />
+
+                  <SheetClose asChild>
+                    <button
+                      aria-label="Close menu"
+                      className="inline-flex items-center justify-center rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    >
+                      <FaTimes className="h-5 w-5" />
+                    </button>
+                  </SheetClose>
                 </div>
               </SheetHeader>
 
-              {/* Links */}
-              <nav className="flex flex-col gap-4 mt-8">
-                {navLinks.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    className="block text-lg font-medium px-2 py-2 rounded hover:bg-gray-100"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-                <Link href="/signup" className="mt-4">
+              <div className="mt-8">
+                <Link href="/signup">
                   <Button className="w-full">Sign up</Button>
                 </Link>
-              </nav>
+              </div>
             </SheetContent>
           </Sheet>
         </div>
