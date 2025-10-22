@@ -47,12 +47,9 @@ const formatFileType = (mime?: string | null, filename?: string | null) => {
   const extMap: Record<string, string> = {
     pdf: "PDF",
     docx: "Word (.docx)",
-    doc: "Word (.doc)",
     xlsx: "Excel (.xlsx)",
-    xls: "Excel (.xls)",
     csv: "CSV",
     pptx: "PowerPoint (.pptx)",
-    ppt: "PowerPoint (.ppt)",
     txt: "Text (.txt)",
     md: "Markdown (.md)",
     jpeg: "JPEG Image",
