@@ -23,7 +23,8 @@ type LibFile = {
   enabled: boolean;
 };
 
-const STORAGE_LIMIT = 10 * 10000 * 10000;
+// TOTAL library limit: 250 MB
+const STORAGE_LIMIT = 250 * 1000 * 1000;
 
 const formatBytes = (bytes: number) => {
   if (bytes === 0) return "0 B";
@@ -90,7 +91,8 @@ const formatFileType = (mime?: string | null, filename?: string | null) => {
 /* -----------------------------
    Validation & constants
    ----------------------------- */
-const MAX_FILE_SIZE = 100000000//1 * 1024 * 1024; // 100MB
+// Per-file max: 50 MB
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 const ALLOWED_EXTS = new Set([
   "docx", "xlsx", "pptx", "pdf", "odt", "ods", "odp",
@@ -213,15 +215,31 @@ export default function LibraryPage() {
 
   const handleFileInput = async (list: FileList | null) => {
     if (!list) return;
+
+    // start with current used bytes
+    let runningTotal = files.reduce((s, f) => s + f.size, 0);
+
     for (const file of Array.from(list)) {
+      // Per-file limit
       if (file.size > MAX_FILE_SIZE) {
-        alert(`File "${file.name}" exceeds the 100MB limit.`);
+        alert(`File "${file.name}" exceeds the 50MB per-file limit.`);
         continue;
       }
+
+      // Total size check (consider previously queued/reserved in this selection)
+      if (runningTotal + file.size > STORAGE_LIMIT) {
+        alert(`Adding "${file.name}" would exceed the total library limit of 250MB.`);
+        continue;
+      }
+
       if (!isAcceptedFile(file)) {
         alert(`File "${file.name}" is not an accepted format.`);
         continue;
       }
+
+      // Reserve the space for this file so subsequent files in the same selection respect the quota.
+      runningTotal += file.size;
+
       try {
         const resp = await uploadWithProgress(file);
         if (!resp?.file) throw new Error(resp?.error || "Upload failed");
@@ -239,6 +257,8 @@ export default function LibraryPage() {
         ]);
       } catch (err) {
         console.error("Upload error", err);
+        // rollback reserved space for this failed upload
+        runningTotal -= file.size;
         alert(`Upload failed for ${file.name}`);
       }
     }
@@ -358,7 +378,7 @@ export default function LibraryPage() {
               </Button>
             </div>
 
-            <div className="text-xs text-gray-400 mt-2">Accepted: docx, xlsx, pptx, pdf, odt, ods, odp, md, markdown, csv, txt, jpeg, png, tiff, webp. Max 100MB per file.</div>
+            <div className="text-xs text-gray-400 mt-2">Accepted: docx, xlsx, pptx, pdf, odt, ods, odp, md, markdown, csv, txt, jpeg, png, tiff, webp. Max 50MB per file.</div>
 
             {/* Active uploads */}
             {Object.keys(uploadProgress).length > 0 && (

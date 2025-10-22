@@ -142,7 +142,7 @@ async function callElasticsearch(query: string, numHits = ELASTIC_NUM_HITS) {
 
   const endpoint = `${ELASTICSEARCH_URL}/${encodeURIComponent(ELASTIC_INDEX)}/_search`;
   const body = {
-    size: numHits,
+    size: numHits, // This caps the initial fetch at ELASTIC_NUM_HITS (default 5)
     query: {
       multi_match: {
         query,
@@ -150,7 +150,7 @@ async function callElasticsearch(query: string, numHits = ELASTIC_NUM_HITS) {
         fuzziness: "AUTO",
       },
     },
-    _source: ["id", "title", "filename", "content", "path"],
+    _source: ["id", "title", "filename", "content", "path", "text", "body"], // Ensure all content fields are fetched
   };
 
   const resp = await fetch(endpoint, {
@@ -201,24 +201,30 @@ function pruneHitsForModel(origHits: any[], maxBytes: number) {
       truncated: false,
       originalCount: 0,
       finalCount: 0,
-      snippetLength: 0,
-      serializedBytes: 0,
+      snippetLength: 0, 
+      serializedBytes: estimateBytes({ hits: [] }),
     };
   }
 
-  let snippetLen = 400; // starting snippet length (matches buildFunctionResponse default)
+  let snippetLen = Number.MAX_SAFE_INTEGER; // Represents "full content" initially as a very large number
   const minSnippet = 50;
-  let maxHits = hitsCopy.length;
+  let maxHits = hitsCopy.length; // Start with all fetched hits (up to ELASTIC_NUM_HITS)
   const minHits = 1;
+  let wasSnippetContentTruncated = false; // Flag to track if snippet content was ever reduced from full length
 
   const buildPreview = (count: number, sLen: number) =>
-    hitsCopy.slice(0, count).map(h => ({
-      id: h.id,
-      score: h.score,
-      title: h.source?.title || h.source?.filename || null,
-      path: h.source?.path || null,
-      snippet: (h.source?.content || h.source?.text || h.source?.body || "").toString().slice(0, sLen),
-    }));
+    hitsCopy.slice(0, count).map(h => {
+      const rawContent = (h.source?.content || h.source?.text || h.source?.body || "").toString();
+      // Only slice if sLen is smaller than the full content length
+      const actualSliceLen = Math.min(sLen, rawContent.length);
+      return {
+        id: h.id,
+        score: h.score,
+        title: h.source?.title || h.source?.filename || null,
+        path: h.source?.path || null,
+        snippet: rawContent.slice(0, actualSliceLen),
+      };
+    });
 
   let preview = buildPreview(maxHits, snippetLen);
   let size = estimateBytes({ hits: preview });
@@ -226,11 +232,14 @@ function pruneHitsForModel(origHits: any[], maxBytes: number) {
   // Iteratively reduce snippetLen first, then number of hits
   while (size > maxBytes) {
     if (snippetLen > minSnippet) {
+      // Reduce snippet length. Mark as truncated.
       snippetLen = Math.max(minSnippet, Math.floor(snippetLen * 0.7));
+      wasSnippetContentTruncated = true; // Set flag if snippet content is reduced
     } else if (maxHits > minHits) {
+      // Snippet length is at min or cannot be reduced further, reduce number of hits.
       maxHits = Math.max(minHits, Math.floor(maxHits * 0.7));
     } else {
-      break;
+      break; // Cannot reduce further
     }
 
     preview = buildPreview(maxHits, snippetLen);
@@ -240,7 +249,8 @@ function pruneHitsForModel(origHits: any[], maxBytes: number) {
   // Build final pruned hits (canonicalize content -> 'content' and remove large fields)
   const finalHits = hitsCopy.slice(0, maxHits).map(h => {
     const rawContent = (h.source?.content || h.source?.text || h.source?.body || "").toString();
-    const trimmedContent = rawContent.slice(0, snippetLen);
+    const actualSliceLen = Math.min(snippetLen, rawContent.length);
+    const trimmedContent = rawContent.slice(0, actualSliceLen);
     const newSource: any = { ...h.source, content: trimmedContent };
     delete newSource.body;
     delete newSource.text;
@@ -249,10 +259,12 @@ function pruneHitsForModel(origHits: any[], maxBytes: number) {
 
   return {
     hits: finalHits,
-    truncated: (finalHits.length !== origHits.length) || snippetLen < 400,
+    // Overall truncated if fewer hits than originally, OR if snippet content was reduced
+    truncated: (finalHits.length !== origHits.length) || wasSnippetContentTruncated,
     originalCount: origHits.length,
     finalCount: finalHits.length,
-    snippetLength: snippetLen,
+    // Report "full" if content was never explicitly sliced due to byte limit, otherwise report the final snippetLen
+    snippetLength: wasSnippetContentTruncated ? snippetLen : "full", 
     serializedBytes: estimateBytes({ hits: finalHits }),
   };
 }
@@ -266,17 +278,19 @@ function buildFunctionResponse(hits: any[]) {
       id: h.id,
       score: h.score,
       title: h.source?.title || h.source?.filename || null,
-      // Use whatever 'content' is present (may already be trimmed by pruneHitsForModel)
-      snippet: (h.source?.content || h.source?.text || h.source?.body || "").toString().slice(0, 400),
+      // Use the content directly, as it has already been pruned by pruneHitsForModel
+      snippet: (h.source?.content || h.source?.text || h.source?.body || "").toString(),
       path: h.source?.path || null,
     })),
   };
 }
 
 // --- GET handler ---
-export async function GET(_req: Request, { params }: { params: { conversationId: string } }) {
+// GET handler — accept ctx and await ctx.params
+export async function GET(req: Request, ctx: { params: Promise<{ conversationId: string }> }) {
   try {
-    const { conversationId } = await params;
+    const paramsObj = await ctx.params;
+    const { conversationId } = paramsObj || {};
     if (!conversationId) {
       return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
     }
@@ -300,9 +314,12 @@ export async function GET(_req: Request, { params }: { params: { conversationId:
 }
 
 // --- POST handler (function-calling using Gemini function declarations, simplified) ---
-export async function POST(req: Request, { params }: { params: { conversationId: string } }) {
+export async function POST(req: Request, ctx: { params: Promise<{ conversationId: string }> }) {
   try {
-    const { conversationId } = await params;
+    const paramsObj = await ctx.params;
+    const { conversationId } = paramsObj || {};
+    if (!conversationId) return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
+
     const body = await req.json();
     const content = (body.content || "").toString().trim();
     const metadata = body.metadata || {};
@@ -376,7 +393,7 @@ export async function POST(req: Request, { params }: { params: { conversationId:
           },
         },
         tools: [esTool],
-        maxOutputTokens: 2000,
+        maxOutputTokens: 10000,
       },
     });
 
@@ -547,7 +564,7 @@ export async function POST(req: Request, { params }: { params: { conversationId:
           },
         },
         tools: [esTool],
-        maxOutputTokens: 4000,
+        maxOutputTokens: 10000,
       },
     });
 
@@ -566,7 +583,7 @@ export async function POST(req: Request, { params }: { params: { conversationId:
           tool_query: esQuery,
           tool_original_hits_count: pruneResult?.originalCount ?? (hits?.length || 0),
           tool_final_hits_count: pruneResult?.finalCount ?? (hits?.length || 0),
-          tool_snippet_length: pruneResult?.snippetLength ?? 0,
+          tool_snippet_length: pruneResult?.snippetLength ?? "N/A", // Use the descriptive string from pruneResult
           tool_serialized_bytes: pruneResult?.serializedBytes ?? estimateBytes({ hits }),
           tool_truncated: !!pruneResult?.truncated,
           tool_hits: (hits || []).slice(0, 10),

@@ -82,7 +82,6 @@ ES_TOOL_RESPONSE_MAX_BYTES=100000
 
 # Vertex AI / Google Cloud
 VERTEX_AI_MODEL=gemini-2.5-flash
-VERTEX_AI_MODE=gemini-2.5-pro
 GCP_PROJECT_ID=your-gcp-project-id
 GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 GCP_LOCATION=us-central1
@@ -94,7 +93,7 @@ DEMO_EMAIL=demo@example.com
 DEMO_PASSWORD=demo123
 
 # Backend
-BACKEND_API_URL=http://localhost:4000
+BACKEND_API_URL=http://localhost:2110
 ```
 
 Then execute `cd ../querynest_backend` and create a file called .env with the following details using your own credentials:
@@ -109,8 +108,8 @@ ELASTIC_USERNAME=your-elastic-username
 ELASTIC_PASSWORD=your-elastic-password
 
 # App Configuration
-ALLOWED_DOMAINS="http://localhost:3000,https://your-production-app.com"
-PORT=4000
+ALLOWED_DOMAINS="http://localhost:2100,https://your-production-app.com"
+PORT=2100
 ```
 
 ### Startup
@@ -119,7 +118,7 @@ You're almost done! Now to start up the frontend, execute `cd querynest_frontend
 
 Now open a new terminal and to execute the backend, run `cd querynest_backend` and then `npm start
 
-Have fun!
+Have fun! You can access the app at http://localhost:2100
 
 ---
 

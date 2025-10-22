@@ -11,18 +11,19 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // DELETE -> delete a conversation and its messages
 export async function DELETE(
   req: Request,
-  { params }: { params: { conversationId: string } }
+  ctx: { params: Promise<{ conversationId: string }> }
 ) {
-  const { conversationId } = await params;
-
-  if (!conversationId) {
-    return NextResponse.json(
-      { error: "Missing conversationId" },
-      { status: 400 }
-    );
-  }
-
   try {
+    const paramsObj = await ctx.params;
+    const conversationId = paramsObj?.conversationId;
+
+    if (!conversationId) {
+      return NextResponse.json(
+        { error: "Missing conversationId" },
+        { status: 400 }
+      );
+    }
+
     // First, delete all messages associated with the conversation
     const { error: messagesError } = await supabaseAdmin
       .from("messages")

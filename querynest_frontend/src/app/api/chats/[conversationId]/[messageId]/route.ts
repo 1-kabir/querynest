@@ -1,4 +1,3 @@
-// app/api/chats/[conversationId]/messages/[messageId]/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
@@ -8,9 +7,12 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-export async function DELETE(_req: Request, { params }: { params: { conversationId: string; messageId: string } }) {
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ conversationId: string; messageId: string }> }
+) {
   try {
-    const { conversationId, messageId } = params;
+    const { conversationId, messageId } = await params;
 
     if (!conversationId || !messageId) {
       return NextResponse.json({ error: "Invalid path parameters" }, { status: 400 });
