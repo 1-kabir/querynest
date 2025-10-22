@@ -6,6 +6,9 @@ import type { NextRequest } from 'next/server';
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const authCookie = req.cookies.get('auth');
+  
+  // Create a default response that will be modified
+  let response = NextResponse.next();
 
   // --- Authentication and Redirection Logic ---
 
@@ -20,34 +23,42 @@ export function middleware(req: NextRequest) {
   }
 
   // 2. Protect dashboard routes: Redirect unauthenticated users from /dashboard to /
-  if (pathname.startsWith('/dashboard') && !authCookie) {
-    return NextResponse.redirect(new URL('/', req.url));
+  if (pathname.startsWith('/dashboard')) {
+    if (!authCookie) {
+      return NextResponse.redirect(new URL('/', req.url));
+    } else {
+      // If authenticated and on dashboard, add cache-control headers
+      // to prevent browser from showing cached version after logout.
+      response.headers.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
+      response.headers.set('Pragma', 'no-cache');
+      response.headers.set('Expires', '0'); // For older browsers
+    }
   }
 
   // 3. Protect API routes: Deny access to most /api routes if unauthenticated
   if (pathname.startsWith('/api')) {
     // Allow login and logout API calls even if not authenticated
     if (pathname.startsWith('/api/login') || pathname.startsWith('/api/logout')) {
-      return NextResponse.next();
+      // Handled by API route, allow through middleware
     }
     // For all other /api routes, require authentication
-    if (!authCookie) {
+    else if (!authCookie) {
       return new NextResponse('Unauthorized', { status: 401 });
     }
   }
 
-  // Allow the request to proceed for all other cases
-  return NextResponse.next();
+  // Return the (potentially modified) response
+  return response;
 }
 
 // Define the paths where the middleware should run
 export const config = {
   matcher: [
-    '/', // Apply middleware to the root path
-    '/login', // Apply middleware to the login page
-    '/signup', // Apply middleware to the signup page
+    '/',
+    '/login',
+    '/signup',
     '/dashboard',
     '/dashboard/:path*',
-    '/api/:path*', // Apply to all API routes
+    '/api/:path*',
   ],
 };
