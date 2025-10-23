@@ -94,6 +94,7 @@ DEMO_PASSWORD=demo123
 
 # Backend
 BACKEND_API_URL=http://localhost:2110
+ALLOWED_API_ORIGINS=domain.com,www.domain.com
 ```
 
 Then execute `cd ../querynest_backend` and create a file called .env with the following details using your own credentials:

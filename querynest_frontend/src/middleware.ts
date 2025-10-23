@@ -1,57 +1,55 @@
-// middleware.ts
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// Middleware function
+const ALLOWED_ORIGINS = (process.env.ALLOWED_API_ORIGINS ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const authCookie = req.cookies.get('auth');
-  
-  // Create a default response that will be modified
+
+  const origin = req.headers.get('host'); // domain of request
+
   let response = NextResponse.next();
 
-  // --- Authentication and Redirection Logic ---
-
-  // 1. If authenticated, prevent access to login/signup pages and root (if it's a login page)
-  if (authCookie) {
-    if (
-      pathname.startsWith('/login') ||
-      pathname.startsWith('/signup')
-    ) {
-      return NextResponse.redirect(new URL('/dashboard', req.url));
-    }
+  // --- Redirect logged-in users away from login/signup ---
+  if (authCookie && (pathname.startsWith('/login') || pathname.startsWith('/signup'))) {
+    return NextResponse.redirect(new URL('/dashboard', req.url));
   }
 
-  // 2. Protect dashboard routes: Redirect unauthenticated users from /dashboard to /
+  // --- Protect dashboard routes ---
   if (pathname.startsWith('/dashboard')) {
     if (!authCookie) {
       return NextResponse.redirect(new URL('/', req.url));
-    } else {
-      // If authenticated and on dashboard, add cache-control headers
-      // to prevent browser from showing cached version after logout.
-      response.headers.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
-      response.headers.set('Pragma', 'no-cache');
-      response.headers.set('Expires', '0'); // For older browsers
     }
+    response.headers.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
+    response.headers.set('Pragma', 'no-cache');
+    response.headers.set('Expires', '0');
   }
 
-  // 3. Protect API routes: Deny access to most /api routes if unauthenticated
+  // --- Protect API routes ---
   if (pathname.startsWith('/api')) {
-    // Allow login and logout API calls even if not authenticated
+    // Always allow login/logout
     if (pathname.startsWith('/api/login') || pathname.startsWith('/api/logout')) {
-      // Handled by API route, allow through middleware
+      return response;
     }
-    // For all other /api routes, require authentication
-    else if (!authCookie) {
+
+    // Only allow requests from allowed origins
+    if (!ALLOWED_ORIGINS.includes(origin || '')) {
+      return new NextResponse('Forbidden', { status: 403 });
+    }
+
+    // Require auth cookie
+    if (!authCookie) {
       return new NextResponse('Unauthorized', { status: 401 });
     }
   }
 
-  // Return the (potentially modified) response
   return response;
 }
 
-// Define the paths where the middleware should run
 export const config = {
   matcher: [
     '/',
