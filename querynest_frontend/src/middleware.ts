@@ -10,8 +10,7 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const authCookie = req.cookies.get('auth');
 
-  const origin = req.headers.get('host'); // domain of request
-
+  const origin = req.headers.get('origin') || '';
   let response = NextResponse.next();
 
   // --- Redirect logged-in users away from login/signup ---
