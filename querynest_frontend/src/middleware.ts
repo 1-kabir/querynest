@@ -3,14 +3,13 @@ import type { NextRequest } from 'next/server';
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_API_ORIGINS ?? '')
   .split(',')
-  .map((o) => o.trim())
+  .map(o => o.trim())
   .filter(Boolean);
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const authCookie = req.cookies.get('auth');
 
-  const origin = req.headers.get('origin') || '';
   let response = NextResponse.next();
 
   // --- Redirect logged-in users away from login/signup ---
@@ -20,9 +19,8 @@ export function middleware(req: NextRequest) {
 
   // --- Protect dashboard routes ---
   if (pathname.startsWith('/dashboard')) {
-    if (!authCookie) {
-      return NextResponse.redirect(new URL('/', req.url));
-    }
+    if (!authCookie) return NextResponse.redirect(new URL('/', req.url));
+
     response.headers.set('Cache-Control', 'no-store, max-age=0, must-revalidate');
     response.headers.set('Pragma', 'no-cache');
     response.headers.set('Expires', '0');
@@ -35,14 +33,13 @@ export function middleware(req: NextRequest) {
       return response;
     }
 
-    // Only allow requests from allowed origins
-    if (!ALLOWED_ORIGINS.includes(origin || '')) {
-      return new NextResponse('Forbidden', { status: 403 });
-    }
-
     // Require auth cookie
-    if (!authCookie) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!authCookie) return new NextResponse('Unauthorized', { status: 401 });
+
+    // Optional: Only check origin for external requests (CORS)
+    const origin = req.headers.get('origin');
+    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+      return new NextResponse('Forbidden', { status: 403 });
     }
   }
 
